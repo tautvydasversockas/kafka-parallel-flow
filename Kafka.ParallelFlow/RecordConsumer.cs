@@ -48,7 +48,7 @@ namespace Kafka.ParallelFlow
 
             var errorCts = new CancellationTokenSource();
             var compositeCts = CancellationTokenSource.CreateLinkedTokenSource(token, errorCts.Token);
-            var compositeTOken = compositeCts.Token;
+            var compositeToken = compositeCts.Token;
 
             _consumer = BuildConsumer();
             _consumer.Subscribe(topics);
@@ -58,11 +58,11 @@ namespace Kafka.ParallelFlow
             for (i = 0; i < _config.MaxDegreeOfParallelism; i++)
             {
                 var reader = _channels[i].Reader;
-                _tasks[i] = StartHandleLoop(reader, consumeResultHandler, token);
+                _tasks[i] = StartHandleLoop(reader, consumeResultHandler, compositeToken);
             }
 
-            _tasks[i++] = StartConsumeLoop(token);
-            _tasks[i] = StartCommitLoop(token);
+            _tasks[i++] = StartConsumeLoop(compositeToken);
+            _tasks[i] = StartCommitLoop(compositeToken);
 
             var firstCompletedTask = await Task.WhenAny(_tasks);
             if (firstCompletedTask.IsFaulted)
@@ -86,30 +86,9 @@ namespace Kafka.ParallelFlow
                             var consumeResult = _consumer.Consume(token);
                             var topicPartition = consumeResult.TopicPartition;
 
-                            if (!_offsetManagers.TryGetValue(topicPartition, out var offsetManager))
-                            {
-                                offsetManager = new OffsetManager.OffsetManager(_config.MaxUncommittedMessages);
-                                _offsetManagers[topicPartition] = offsetManager;
-                            }
+                            var ackId = await GetAckIdAsync(consumeResult, token);
 
-                            var ackId = await offsetManager.GetAckIdAsync(consumeResult.Offset, token);
-
-                            int channelIndex;
-
-                            if (MemoryPartitionKeyResolver is null)
-                            {
-                                channelIndex = _nextChannelIndex;
-                                _nextChannelIndex = _nextChannelIndex == _channels.Length - 1
-                                    ? 0
-                                    : _nextChannelIndex + 1;
-                            }
-                            else
-                            {
-                                var memoryPartitionKey = MemoryPartitionKeyResolver(consumeResult);
-                                channelIndex = _partitionManager.GetPartition(memoryPartitionKey);
-                            }
-
-                            var channelWriter = _channels[channelIndex].Writer;
+                            var channelWriter = GetChannelWriter(consumeResult);
                             await channelWriter.WriteAsync((consumeResult, ackId), token);
                         }
                     }
@@ -137,8 +116,7 @@ namespace Kafka.ParallelFlow
                         await foreach (var (consumeResult, ackId) in reader.ReadAllAsync(token))
                         {
                             await consumeResultHandler(consumeResult, token);
-                            var offsetManager = _offsetManagers[consumeResult.TopicPartition];
-                            offsetManager.Ack(ackId);
+                            Ack(consumeResult, ackId);
                         }
                     }
                     catch (OperationCanceledException)
@@ -151,9 +129,6 @@ namespace Kafka.ParallelFlow
 
         private Task StartCommitLoop(CancellationToken token)
         {
-            if (_consumer is null)
-                throw new InvalidOperationException("Consumer not started.");
-
             return Task.Run(
                 async () =>
                 {
@@ -162,21 +137,7 @@ namespace Kafka.ParallelFlow
                         while (!token.IsCancellationRequested)
                         {
                             await Task.Delay(_config.CommitIntervalMs, token);
-
-                            var topicPartitionOffsets = new List<TopicPartitionOffset>();
-
-                            foreach (var (topicPartition, offsetManager) in _offsetManagers)
-                            {
-                                var commitOffset = offsetManager.GetCommitOffset();
-
-                                if (commitOffset is not null)
-                                {
-                                    var topicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value);
-                                    topicPartitionOffsets.Add(topicPartitionOffset);
-                                }
-                            }
-
-                            _consumer.Commit(topicPartitionOffsets);
+                            CommitOffsets();
                         }
                     }
                     catch (OperationCanceledException)
@@ -185,6 +146,64 @@ namespace Kafka.ParallelFlow
                     }
                 },
                 token);
+        }
+
+        private ChannelWriter<(ConsumeResult<TKey, TValue>, AckId)> GetChannelWriter(ConsumeResult<TKey, TValue> consumeResult)
+        {
+            int channelIndex;
+
+            if (MemoryPartitionKeyResolver is null)
+            {
+                channelIndex = _nextChannelIndex;
+                _nextChannelIndex = _nextChannelIndex == _channels.Length - 1
+                    ? 0
+                    : _nextChannelIndex + 1;
+            }
+            else
+            {
+                var memoryPartitionKey = MemoryPartitionKeyResolver(consumeResult);
+                channelIndex = _partitionManager.GetPartition(memoryPartitionKey);
+            }
+
+            return _channels[channelIndex].Writer;
+        }
+
+        private Task<AckId> GetAckIdAsync<TAckKey, TAckValue>(ConsumeResult<TAckKey, TAckValue> consumeResult, CancellationToken token)
+        {
+            if (!_offsetManagers.TryGetValue(consumeResult.TopicPartition, out var offsetManager))
+            {
+                offsetManager = new OffsetManager.OffsetManager(_config.MaxUncommittedMessages);
+                _offsetManagers[consumeResult.TopicPartition] = offsetManager;
+            }
+
+            return offsetManager.GetAckIdAsync(consumeResult.Offset, token);
+        }
+
+        private void Ack<TAckKey, TAckValue>(ConsumeResult<TAckKey, TAckValue> consumeResult, AckId ackId)
+        {
+            var offsetManager = _offsetManagers[consumeResult.TopicPartition];
+            offsetManager.Ack(ackId);
+        }
+
+        private void CommitOffsets()
+        {
+            if (_consumer is null)
+                throw new InvalidOperationException("Consumer not started.");
+
+            var topicPartitionOffsets = new List<TopicPartitionOffset>();
+
+            foreach (var (topicPartition, offsetManager) in _offsetManagers)
+            {
+                var commitOffset = offsetManager.GetCommitOffset();
+
+                if (commitOffset is not null)
+                {
+                    var topicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value);
+                    topicPartitionOffsets.Add(topicPartitionOffset);
+                }
+            }
+
+            _consumer.Commit(topicPartitionOffsets);
         }
 
         private IConsumer<TKey, TValue> BuildConsumer()
@@ -236,10 +255,12 @@ namespace Kafka.ParallelFlow
 
         public void Dispose()
         {
-            _consumer?.Dispose();
-
             foreach (var task in _tasks)
                 task.Dispose();
+
+            CommitOffsets();
+
+            _consumer?.Dispose();
         }
     }
 }
