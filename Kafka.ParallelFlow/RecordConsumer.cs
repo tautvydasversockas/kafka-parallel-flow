@@ -93,7 +93,19 @@ namespace Kafka.ParallelFlow
                             var consumeResult = consumer.Consume(token);
                             var topicPartition = consumeResult.TopicPartition;
 
-                            var ackId = await GetAckIdAsync(consumeResult, token);
+                            AckId ackId;
+
+                            try
+                            {
+                                ackId = await GetAckIdAsync(consumeResult, token);
+                            }
+                            catch (KafkaOffsetManagementException e)
+                                when (e.ErrorCode is KafkaOffsetManagementErrorCode.OffsetOutOfOrder)
+                            {
+                                // Partition was revoked and assigned back.
+                                // Some messages are redelivered therefore can be discarded.
+                                continue;
+                            }
 
                             var channelWriter = GetChannelWriter(consumeResult);
                             await channelWriter.WriteAsync((consumeResult, ackId), token);
