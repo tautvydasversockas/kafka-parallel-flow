@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace Kafka.ParallelFlow
 {
-    public sealed class RecordConsumer<TKey, TValue>
+    public sealed class RecordConsumer<TKey, TValue> : IDisposable
     {
         public IDeserializer<TKey>? KeyDeserializer { get; set; }
         public IDeserializer<TValue>? ValueDeserializer { get; set; }
@@ -35,6 +35,11 @@ namespace Kafka.ParallelFlow
             _channels = new Channel<(ConsumeResult<TKey, TValue>, AckId)>[config.MaxDegreeOfParallelism];
             for (var i = 0; i < config.MaxDegreeOfParallelism; i++)
                 _channels[i] = Channel.CreateUnbounded<(ConsumeResult<TKey, TValue>, AckId)>();
+        }
+
+        public Task Start(string topic, CancellationToken token = default)
+        {
+            return Start(new[] { topic }, token);
         }
 
         public async Task Start(IReadOnlyCollection<string> topics, CancellationToken token = default)
@@ -295,6 +300,12 @@ namespace Kafka.ParallelFlow
                 builder.SetStatisticsHandler(StatisticsHandler);
 
             return builder.Build();
+        }
+
+        public void Dispose()
+        {
+            foreach (var offsetManager in _offsetManagers.Values)
+                offsetManager.Dispose();
         }
     }
 }
