@@ -15,6 +15,7 @@ namespace Kafka.ParallelFlow
         public Action<IConsumer<TKey, TValue>, Error>? ErrorHandler { get; set; }
         public Action<IConsumer<TKey, TValue>, LogMessage>? LogHandler { get; set; }
         public Action<IConsumer<TKey, TValue>, string>? StatisticsHandler { get; set; }
+        public Func<ConsumeResult<TKey, TValue>, CancellationToken, Task>? ConsumeResultHandler { get; set; }
         public Func<ConsumeResult<TKey, TValue>, byte[]>? MemoryPartitionKeyResolver { get; set; }
 
         private readonly Dictionary<TopicPartition, OffsetManager> _offsetManagers = new();
@@ -35,10 +36,7 @@ namespace Kafka.ParallelFlow
                 _channels[i] = Channel.CreateUnbounded<(ConsumeResult<TKey, TValue>, AckId)>();
         }
 
-        public async Task Start(
-            IReadOnlyCollection<string> topics,
-            Func<ConsumeResult<TKey, TValue>, CancellationToken, Task> consumeResultHandler,
-            CancellationToken token = default)
+        public async Task Start(IReadOnlyCollection<string> topics, CancellationToken token = default)
         {
             _isStarted = _isStarted
                 ? throw new InvalidOperationException("Already started.")
@@ -57,7 +55,7 @@ namespace Kafka.ParallelFlow
             for (i = 0; i < _config.MaxDegreeOfParallelism; i++)
             {
                 var reader = _channels[i].Reader;
-                tasks[i] = StartHandleLoop(reader, consumeResultHandler, compositeToken);
+                tasks[i] = StartHandleLoop(reader, compositeToken);
             }
 
             tasks[i++] = StartConsumeLoop(consumer, compositeToken);
@@ -109,10 +107,7 @@ namespace Kafka.ParallelFlow
                 token);
         }
 
-        private Task StartHandleLoop(
-            ChannelReader<(ConsumeResult<TKey, TValue>, AckId)> reader,
-            Func<ConsumeResult<TKey, TValue>, CancellationToken, Task> consumeResultHandler,
-            CancellationToken token)
+        private Task StartHandleLoop(ChannelReader<(ConsumeResult<TKey, TValue>, AckId)> reader, CancellationToken token)
         {
             return Task.Run(
                 async () =>
@@ -121,7 +116,9 @@ namespace Kafka.ParallelFlow
                     {
                         await foreach (var (consumeResult, ackId) in reader.ReadAllAsync(token))
                         {
-                            await consumeResultHandler(consumeResult, token);
+                            if (ConsumeResultHandler is not null)
+                                await ConsumeResultHandler(consumeResult, token);
+
                             Ack(consumeResult, ackId);
                         }
                     }
