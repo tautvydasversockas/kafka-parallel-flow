@@ -4,7 +4,7 @@ namespace Kafka.ParallelFlow
 {
     public sealed class RecordConsumerConfig
     {
-        public int CommitIntervalMs { get; set; } = 5_000;
+        public int AutoCommitIntervalMs { get; set; } = 5_000;
 
         public bool SocketNagleDisable { get; set; } = false;
 
