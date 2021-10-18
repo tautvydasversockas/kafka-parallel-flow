@@ -47,5 +47,7 @@ namespace Kafka.ParallelFlow
         public bool CheckCrcs { get; set; } = false;
 
         public bool AllowAutoCreateTopics { get; set; } = false;
+
+        public string Debug { get; set; } = string.Empty;
     }
 }

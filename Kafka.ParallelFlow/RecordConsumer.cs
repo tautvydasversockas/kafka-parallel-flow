@@ -61,8 +61,8 @@ namespace Kafka.ParallelFlow
                 _tasks[i] = StartHandleLoop(reader, consumeResultHandler, compositeToken);
             }
 
-            _tasks[i++] = StartConsumeLoop(compositeToken);
-            _tasks[i] = StartCommitLoop(compositeToken);
+            _tasks[i++] = StartConsumeLoop(_consumer, compositeToken);
+            _tasks[i] = StartCommitLoop(_consumer, compositeToken);
 
             var firstCompletedTask = await Task.WhenAny(_tasks);
             if (firstCompletedTask.IsFaulted)
@@ -71,11 +71,8 @@ namespace Kafka.ParallelFlow
             await Task.WhenAll(_tasks);
         }
 
-        private Task StartConsumeLoop(CancellationToken token)
+        private Task StartConsumeLoop(IConsumer<TKey, TValue> consumer, CancellationToken token)
         {
-            if (_consumer is null)
-                throw new InvalidOperationException("Consumer not started.");
-
             return Task.Run(
                 async () =>
                 {
@@ -83,7 +80,7 @@ namespace Kafka.ParallelFlow
                     {
                         while (!token.IsCancellationRequested)
                         {
-                            var consumeResult = _consumer.Consume(token);
+                            var consumeResult = consumer.Consume(token);
                             var topicPartition = consumeResult.TopicPartition;
 
                             var ackId = await GetAckIdAsync(consumeResult, token);
@@ -105,9 +102,6 @@ namespace Kafka.ParallelFlow
             Func<ConsumeResult<TKey, TValue>, CancellationToken, Task> consumeResultHandler,
             CancellationToken token)
         {
-            if (_consumer is null)
-                throw new InvalidOperationException("Consumer not started.");
-
             return Task.Run(
                 async () =>
                 {
@@ -127,7 +121,7 @@ namespace Kafka.ParallelFlow
                 token);
         }
 
-        private Task StartCommitLoop(CancellationToken token)
+        private Task StartCommitLoop(IConsumer<TKey, TValue> consumer, CancellationToken token)
         {
             return Task.Run(
                 async () =>
@@ -137,7 +131,7 @@ namespace Kafka.ParallelFlow
                         while (!token.IsCancellationRequested)
                         {
                             await Task.Delay(_config.CommitIntervalMs, token);
-                            CommitOffsets();
+                            CommitOffsets(consumer);
                         }
                     }
                     catch (OperationCanceledException)
@@ -185,11 +179,8 @@ namespace Kafka.ParallelFlow
             offsetManager.Ack(ackId);
         }
 
-        private void CommitOffsets()
+        private void CommitOffsets(IConsumer<TKey, TValue> consumer)
         {
-            if (_consumer is null)
-                throw new InvalidOperationException("Consumer not started.");
-
             var topicPartitionOffsets = new List<TopicPartitionOffset>();
 
             foreach (var (topicPartition, offsetManager) in _offsetManagers)
@@ -203,7 +194,7 @@ namespace Kafka.ParallelFlow
                 }
             }
 
-            _consumer.Commit(topicPartitionOffsets);
+            consumer.Commit(topicPartitionOffsets);
         }
 
         private IConsumer<TKey, TValue> BuildConsumer()
@@ -229,6 +220,7 @@ namespace Kafka.ParallelFlow
                 FetchErrorBackoffMs = _config.FetchErrorBackoffMs,
                 IsolationLevel = _config.IsolationLevel,
                 EnablePartitionEof = _config.EnablePartitionEof,
+                Debug = _config.Debug,
                 EnableAutoOffsetStore = false,
                 EnableAutoCommit = false,
             };
@@ -258,9 +250,11 @@ namespace Kafka.ParallelFlow
             foreach (var task in _tasks)
                 task.Dispose();
 
-            CommitOffsets();
-
-            _consumer?.Dispose();
+            if (_consumer is not null)
+            {
+                CommitOffsets(_consumer);
+                _consumer.Dispose();
+            }
         }
     }
 }
