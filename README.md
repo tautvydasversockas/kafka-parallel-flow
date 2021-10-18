@@ -24,7 +24,7 @@ PM> Install-Package Kafka.ParallelFlow
 ## Usage
 
 ```csharp
-using Kafka.ParallelFLow;
+using Kafka.ParallelFlow;
 using System.Threading.Tasks;
 
 class Program
