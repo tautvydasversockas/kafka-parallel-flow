@@ -7,7 +7,7 @@
 This library provides a Kafka client for consuming messages in parallel from a single topic partition. 
 Parallel consumption allows to process more data while at the same time improves CPU utilization.
 
-This library is based on [confluent-kafka-dotnet] (https://github.com/confluentinc/confluent-kafka-dotnet) library.
+This library is based on [confluent-kafka-dotnet](https://github.com/confluentinc/confluent-kafka-dotnet) library.
 
 ## Installation
 
