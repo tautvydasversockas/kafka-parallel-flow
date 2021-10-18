@@ -198,7 +198,7 @@ namespace Kafka.ParallelFlow
 
                 if (commitOffset is not null)
                 {
-                    var topicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value + 1);
+                    var topicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value);
                     topicPartitionOffsets.Add(topicPartitionOffset);
                 }
             }
