@@ -46,7 +46,8 @@ class Program
             GroupId = "group-id-1",
             BootstrapServers = "localhost:9092",
             // Messages will be handled in parallel by up to 10 threads.
-            MaxDegreeOfParallelism = 10
+            MaxDegreeOfParallelism = 10,
+            AutoOffsetReset = AutoOffsetReset.Earliest
         };
 
         using var consumer = new RecordConsumer<byte[], byte[]>(config)
