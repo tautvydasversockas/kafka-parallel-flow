@@ -217,7 +217,7 @@ namespace Kafka.ParallelFlow
         {
             if (!_offsetManagers.TryGetValue(topicPartitionOffset.TopicPartition, out var offsetManager))
             {
-                offsetManager = new OffsetManager(_config.MaxUncommittedMessages);
+                offsetManager = new OffsetManager(_config.MaxUncommittedMessagesPerMemoryPartition);
                 _offsetManagers[topicPartitionOffset.TopicPartition] = offsetManager;
             }
 
@@ -279,7 +279,7 @@ namespace Kafka.ParallelFlow
                 EnablePartitionEof = _config.EnablePartitionEof,
                 Debug = _config.Debug,
                 EnableAutoOffsetStore = false,
-                EnableAutoCommit = false,
+                EnableAutoCommit = false
             };
 
             var builder = new ConsumerBuilder<TKey, TValue>(config);

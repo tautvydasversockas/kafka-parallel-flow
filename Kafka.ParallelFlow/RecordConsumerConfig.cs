@@ -4,50 +4,58 @@ namespace Kafka.ParallelFlow
 {
     public sealed class RecordConsumerConfig
     {
+        #region `Kafka.ParallelFlow` config values
+
         public int AutoCommitIntervalMs { get; set; } = 5_000;
-
-        public bool SocketNagleDisable { get; set; } = false;
-
-        public AutoOffsetReset AutoOffsetReset { get; set; } = AutoOffsetReset.Latest;
-
-        public int SessionTimeoutMs { get; set; } = 45_000;
-
-        public int HeartbeatIntervalMs { get; set; } = 3_000;
-
-        public string GroupId { get; set; } = string.Empty;
-
-        public string BootstrapServers { get; set; } = string.Empty;
 
         public int MaxDegreeOfParallelism { get; set; } = 1;
 
-        public int MaxUncommittedMessages { get; set; } = 10_000;
+        public int MaxUncommittedMessagesPerMemoryPartition { get; set; } = 10_000;
 
-        public int CoordinatorQueryIntervalMs { get; set; } = 600_000;
+        #endregion
 
-        public int MaxPollIntervalMs { get; set; } = 300_000;
+        #region `Confluent.Kafka` config values
 
-        public int QueuedMinMessages { get; set; } = 100_000;
+        public string? GroupId { get; set; }
 
-        public int QueuedMaxMessagesKbytes { get; set; } = 65_536;
+        public string? BootstrapServers { get; set; }
 
-        public int FetchWaitMaxMs { get; set; } = 500;
+        public bool? SocketNagleDisable { get; set; }
 
-        public int MaxPartitionFetchBytes { get; set; } = 1_048_576;
+        public AutoOffsetReset? AutoOffsetReset { get; set; }
 
-        public int FetchMaxBytes { get; set; } = 52_428_800;
+        public int? SessionTimeoutMs { get; set; }
 
-        public int FetchMinBytes { get; set; } = 1;
+        public int? HeartbeatIntervalMs { get; set; }
 
-        public int FetchErrorBackoffMs { get; set; } = 500;
+        public int? CoordinatorQueryIntervalMs { get; set; }
 
-        public IsolationLevel IsolationLevel { get; set; } = IsolationLevel.ReadCommitted;
+        public int? MaxPollIntervalMs { get; set; }
 
-        public bool EnablePartitionEof { get; set; } = false;
+        public int? QueuedMinMessages { get; set; }
 
-        public bool CheckCrcs { get; set; } = false;
+        public int? QueuedMaxMessagesKbytes { get; set; }
 
-        public bool AllowAutoCreateTopics { get; set; } = false;
+        public int? FetchWaitMaxMs { get; set; }
 
-        public string Debug { get; set; } = string.Empty;
+        public int? MaxPartitionFetchBytes { get; set; }
+
+        public int? FetchMaxBytes { get; set; }
+
+        public int? FetchMinBytes { get; set; }
+
+        public int? FetchErrorBackoffMs { get; set; }
+
+        public IsolationLevel? IsolationLevel { get; set; }
+
+        public bool? EnablePartitionEof { get; set; }
+
+        public bool? CheckCrcs { get; set; }
+
+        public bool? AllowAutoCreateTopics { get; set; }
+
+        public string? Debug { get; set; }
+
+        #endregion
     }
 }
