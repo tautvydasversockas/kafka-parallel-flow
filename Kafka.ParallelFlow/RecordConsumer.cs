@@ -20,6 +20,7 @@ namespace Kafka.ParallelFlow
         public Func<ConsumeResult<TKey, TValue>, byte[]>? MemoryPartitionKeyResolver { get; set; }
 
         private readonly Dictionary<TopicPartition, OffsetManager> _offsetManagers = new();
+        private readonly Dictionary<TopicPartition, Offset> _committedOffsets = new();
         private readonly Channel<(ConsumeResult<TKey, TValue>, AckId)>[] _channels;
         private readonly RecordConsumerConfig _config;
         private readonly PartitionManager _partitionManager;
@@ -219,6 +220,7 @@ namespace Kafka.ParallelFlow
             {
                 offsetManager = new OffsetManager(_config.MaxUncommittedMessagesPerMemoryPartition);
                 _offsetManagers[topicPartitionOffset.TopicPartition] = offsetManager;
+                _committedOffsets[topicPartitionOffset.TopicPartition] = Offset.Beginning;
             }
 
             return offsetManager.GetAckIdAsync(topicPartitionOffset.Offset, token);
@@ -238,20 +240,21 @@ namespace Kafka.ParallelFlow
 
         private void CommitOffsets(IConsumer<TKey, TValue> consumer)
         {
-            var topicPartitionOffsets = new List<TopicPartitionOffset>();
+            var commitTopicPartitionOffsets = new List<TopicPartitionOffset>();
 
             foreach (var (topicPartition, offsetManager) in _offsetManagers)
             {
                 var commitOffset = offsetManager.GetCommitOffset();
 
-                if (commitOffset is not null)
+                if (commitOffset is not null && commitOffset > _committedOffsets[topicPartition])
                 {
-                    var topicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value);
-                    topicPartitionOffsets.Add(topicPartitionOffset);
+                    _committedOffsets[topicPartition] = commitOffset.Value;
+                    var commitTopicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value);
+                    commitTopicPartitionOffsets.Add(commitTopicPartitionOffset);
                 }
             }
 
-            consumer.Commit(topicPartitionOffsets);
+            consumer.Commit(commitTopicPartitionOffsets);
         }
 
         private IConsumer<TKey, TValue> BuildConsumer()
