@@ -1,9 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFrameworks>netstandard2.1;net5.0</TargetFrameworks>
+		<TargetFrameworks>netstandard2.1;net6.0</TargetFrameworks>
 		<PackageId>Kafka.ParallelFlow</PackageId>
-		<Version>0.1.1</Version>
+		<Version>0.2.1</Version>
 		<Authors>Tautvydas Versockas</Authors>
 		<Description>Kafka.ParallelFlow - Kafka client for processing data at scale</Description>
 		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
@@ -13,14 +13,25 @@
 		<PackageReleaseNotes>https://github.com/tautvydasversockas/kafka-parallel-flow/releases</PackageReleaseNotes>
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
 		<Nullable>enable</Nullable>
-		<LangVersion>9.0</LangVersion>
-		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<WarningsAsErrors>nullable</WarningsAsErrors>
+		<LangVersion>10.0</LangVersion>
 	</PropertyGroup>
 
 	<ItemGroup>
-	  <PackageReference Include="Confluent.Kafka" Version="1.8.1" />
-	  <PackageReference Include="Kafka.OffsetManager" Version="2.1.0" />
-	  <PackageReference Include="System.Threading.Channels" Version="5.0.0" />
+		<Compile Remove="IsExternalInit.cs" Condition="'$(TargetFramework)' == 'net6.0'" />
 	</ItemGroup>
 	
+	<ItemGroup>
+		<PackageReference Include="Confluent.Kafka" Version="1.8.2" />
+		<PackageReference Include="Kafka.OffsetManager" Version="2.2.0" />
+		<PackageReference Include="System.Threading.Channels" Version="6.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Using Include="Confluent.Kafka" />
+		<Using Include="Kafka.OffsetManagement" />
+		<Using Include="System.Threading.Channels" />
+	</ItemGroup>
+
 </Project>
