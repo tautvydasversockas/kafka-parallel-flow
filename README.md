@@ -44,18 +44,24 @@ var config = new RecordConsumerConfig
     AutoOffsetReset = AutoOffsetReset.Earliest
 };
 
-using var consumer = new RecordConsumer<byte[], byte[]>(config)
+var consumer = new RecordConsumer<byte[], byte[]>(config);
+
+// Messages with the same resolved key are handled in order.
+// If `MemoryPartitionKeyResolver` is not set, no order 
+// guarantees are provided.
+consumer.MemoryPartitionKeyResolver = cr => cr.Message.Key;
+
+consumer.ConsumeResultHandler = (cr, ct) => 
 {
-    // Messages with the same resolved key are handled in order.
-    // If `MemoryPartitionKeyResolver` is not set, no order 
-    // guarantees are provided.
-    MemoryPartitionKeyResolver = cr => cr.Message.Key,
-    ConsumeResultHandler = (cr, ct) => 
-    {
-        Console.WriteLine(cr.TopicPartitionOffset.ToString());
-        return Task.CompletedTask;
-    }
-}
+    Console.WriteLine(cr.TopicPartitionOffset.ToString());
+    return Task.CompletedTask;
+};
 
 await consumer.Start("test-topic", cts.Token)
 ```
+
+## Support
+
+<a href="https://www.buymeacoffee.com/tautvydasverso"> 
+    <img align="left" src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210"  alt="tautvydasverso" />
+</a>
