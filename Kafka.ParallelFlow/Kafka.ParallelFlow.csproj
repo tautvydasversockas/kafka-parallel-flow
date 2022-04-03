@@ -3,7 +3,7 @@
 	<PropertyGroup>
 		<TargetFrameworks>netstandard2.1;net6.0</TargetFrameworks>
 		<PackageId>Kafka.ParallelFlow</PackageId>
-		<Version>0.2.1</Version>
+		<Version>0.3.0</Version>
 		<Authors>Tautvydas Versockas</Authors>
 		<Description>Kafka.ParallelFlow - Kafka client for processing data at scale</Description>
 		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
@@ -17,6 +17,12 @@
 		<WarningsAsErrors>nullable</WarningsAsErrors>
 		<LangVersion>10.0</LangVersion>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Kafka.ParallelFlow.Tests</_Parameter1>
+		</AssemblyAttribute>
+	</ItemGroup>
 
 	<ItemGroup>
 		<Compile Remove="IsExternalInit.cs" Condition="'$(TargetFramework)' == 'net6.0'" />

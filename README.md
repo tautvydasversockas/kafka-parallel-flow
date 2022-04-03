@@ -28,14 +28,7 @@ PM> Install-Package Kafka.ParallelFlow
 ```csharp
 using Kafka.ParallelFlow;
 
-CancellationTokenSource cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) => 
-{
-    e.Cancel = true;
-    cts.Cancel();
-};
-
-var config = new RecordConsumerConfig
+var consumerConfig = new RecordConsumerConfig
 {
     GroupId = "group-id-1",
     BootstrapServers = "localhost:9092",
@@ -44,20 +37,57 @@ var config = new RecordConsumerConfig
     AutoOffsetReset = AutoOffsetReset.Earliest
 };
 
-var consumer = new RecordConsumer<byte[], byte[]>(config);
+var consumer = new RecordConsumer(consumerConfig);
 
 // Messages with the same resolved key are handled in order.
 // If `MemoryPartitionKeyResolver` is not set, no order 
-// guarantees are provided.
-consumer.MemoryPartitionKeyResolver = cr => cr.Message.Key;
+// guarantees are provided - memory partitions are chosen in 
+// round robin fashion.
+consumer.MemoryPartitionKeyResolver = consumeResult => consumeResult.Message.Key;
 
-consumer.ConsumeResultHandler = (cr, ct) => 
+consumer.ConsumeResultHandler = (consumeResult, _) => 
 {
-    Console.WriteLine(cr.TopicPartitionOffset.ToString());
+    Console.WriteLine(consumeResult.TopicPartitionOffset.ToString());
     return Task.CompletedTask;
 };
 
-await consumer.Start("test-topic", cts.Token)
+await consumer.Start("test-topic");
+```
+
+### Dead letter topic example
+
+```csharp
+using Kafka.ParallelFlow;
+
+var producerConfig = new ProducerConfig
+{
+    BootstrapServers = BootstrapServers
+};
+
+var producer = new ProducerBuilder<byte[], byte[]>(producerConfig).Build();
+
+var consumerConfig = new RecordConsumerConfig
+{
+    GroupId = "group-id-1",
+    BootstrapServers = "localhost:9092",
+    MaxDegreeOfParallelism = 10,
+    AutoOffsetReset = AutoOffsetReset.Earliest
+};
+
+var consumer = new RecordConsumer(consumerConfig);
+
+// Setting producer enables dead letter topic functionality. 
+// If an error occurs in `ConsumeResultHandler`, the message will be produced
+// to a dead letter topic. Default dead letter topic name is <topic>__<consumer-group-id>__dlt.
+consumer.Producer = producer;
+
+consumer.ConsumeResultHandler = (consumeResult, _) => 
+{
+    Console.WriteLine(consumeResult.TopicPartitionOffset.ToString());
+    return Task.CompletedTask;
+};
+
+await consumer.Start("test-topic");
 ```
 
 ## Support

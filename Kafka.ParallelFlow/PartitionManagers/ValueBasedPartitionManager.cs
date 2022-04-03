@@ -1,25 +1,24 @@
-﻿namespace Kafka.ParallelFlow;
+﻿namespace Kafka.ParallelFlow.PartitionManagers;
 
-internal sealed class PartitionManager
+internal sealed class ValueBasedPartitionManager
 {
     private readonly int _numberOfPartitions;
 
-    public PartitionManager(int numberOfPartitions)
+    public ValueBasedPartitionManager(int numberOfPartitions)
     {
         if (numberOfPartitions < 1)
-            throw new ArgumentException(
-                "Number of partitions must be greater than 0.", nameof(numberOfPartitions));
+            throw new ArgumentException("Number of partitions must be greater than 0.", nameof(numberOfPartitions));
 
         _numberOfPartitions = numberOfPartitions;
     }
 
-    public int GetPartition(byte[] value)
+    public int GetPartition(Span<byte> value)
     {
         var hash = Math.Abs(Hash(value));
         return (int)(hash % _numberOfPartitions);
     }
 
-    private static long Hash(byte[] value)
+    private static long Hash(Span<byte> value)
     {
         var hash = 14695981039346656037;
         unchecked

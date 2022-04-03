@@ -1,33 +1,40 @@
-﻿namespace Kafka.ParallelFlow;
+﻿using Kafka.ParallelFlow.PartitionManagers;
 
-public sealed class RecordConsumer<TKey, TValue> : IDisposable
+namespace Kafka.ParallelFlow;
+
+/// <summary>
+///     Defines a high-level Apache Kafka consumer (with key and value deserialization).
+/// </summary>
+public sealed class RecordConsumer : IDisposable
 {
-    public IDeserializer<TKey>? KeyDeserializer { get; set; }
-    public IDeserializer<TValue>? ValueDeserializer { get; set; }
-    public Action<IConsumer<TKey, TValue>, Error>? ErrorHandler { get; set; }
-    public Action<IConsumer<TKey, TValue>, LogMessage>? LogHandler { get; set; }
-    public Action<IConsumer<TKey, TValue>, string>? StatisticsHandler { get; set; }
+    public Action<IConsumer<byte[], byte[]>, Error>? ErrorHandler { get; set; }
+    public Action<IConsumer<byte[], byte[]>, LogMessage>? LogHandler { get; set; }
+    public Action<IConsumer<byte[], byte[]>, string>? StatisticsHandler { get; set; }
     public Func<ConsumeException, CancellationToken, Task>? DeserializationErrorHandler { get; set; }
-    public Func<ConsumeResult<TKey, TValue>, CancellationToken, Task>? ConsumeResultHandler { get; set; }
-    public Func<ConsumeResult<TKey, TValue>, byte[]>? MemoryPartitionKeyResolver { get; set; }
+    public Func<ConsumeResult<byte[], byte[]>, CancellationToken, Task>? ConsumeResultHandler { get; set; }
+    public Func<ConsumeResult<byte[], byte[]>, byte[]>? MemoryPartitionKeyResolver { get; set; }
+    public IProducer<byte[], byte[]>? Producer { get; set; }
 
     private readonly Dictionary<TopicPartition, OffsetManager> _offsetManagers = new();
     private readonly Dictionary<TopicPartition, Offset> _committedOffsets = new();
-    private readonly Channel<(ConsumeResult<TKey, TValue>, AckId)>[] _channels;
+    private readonly Channel<(ConsumeResult<byte[], byte[]>, AckId)>[] _channels;
     private readonly RecordConsumerConfig _config;
-    private readonly PartitionManager _partitionManager;
+    private readonly RoundRobinPartitionManager _roundRobinPartitionManager;
+    private readonly ValueBasedPartitionManager _valueBasedPartitionManger;
+    private readonly RetryTopicMap _retryTopicMap;
 
-    private int _nextChannelIndex;
     private bool _isStarted;
 
     public RecordConsumer(RecordConsumerConfig config)
     {
         _config = config;
-        _partitionManager = new PartitionManager(config.MaxDegreeOfParallelism);
+        _roundRobinPartitionManager = new RoundRobinPartitionManager(config.MaxDegreeOfParallelism);
+        _valueBasedPartitionManger = new ValueBasedPartitionManager(config.MaxDegreeOfParallelism);
+        _retryTopicMap = new RetryTopicMap(config.GroupId);
 
-        _channels = new Channel<(ConsumeResult<TKey, TValue>, AckId)>[config.MaxDegreeOfParallelism];
+        _channels = new Channel<(ConsumeResult<byte[], byte[]>, AckId)>[config.MaxDegreeOfParallelism];
         for (var i = 0; i < config.MaxDegreeOfParallelism; i++)
-            _channels[i] = Channel.CreateUnbounded<(ConsumeResult<TKey, TValue>, AckId)>();
+            _channels[i] = Channel.CreateUnbounded<(ConsumeResult<byte[], byte[]>, AckId)>();
     }
 
     public Task Start(string topic, CancellationToken token = default)
@@ -48,17 +55,20 @@ public sealed class RecordConsumer<TKey, TValue> : IDisposable
         var consumer = BuildConsumer();
         consumer.Subscribe(topics);
 
-        var tasks = new Task[_config.MaxDegreeOfParallelism + 2];
+        var consumerTaskCount = _config.MaxDegreeOfParallelism;
+        var totalTaskCount = consumerTaskCount + 2;
+
+        var tasks = new Task[totalTaskCount];
         int i;
 
-        for (i = 0; i < _config.MaxDegreeOfParallelism; i++)
+        for (i = 0; i < consumerTaskCount; i++)
         {
             var reader = _channels[i].Reader;
-            tasks[i] = StartHandleLoop(reader, compositeToken);
+            tasks[i] = Task.Run(() => HandleLoop(reader, compositeToken), compositeToken);
         }
 
-        tasks[i++] = StartConsumeLoop(consumer, compositeToken);
-        tasks[i] = StartCommitLoop(consumer, compositeToken);
+        tasks[i++] = Task.Run(() => ConsumeLoop(consumer, compositeToken), compositeToken);
+        tasks[i] = Task.Run(() => CommitLoop(consumer, compositeToken), compositeToken);
 
         var firstCompletedTask = await Task.WhenAny(tasks);
         if (firstCompletedTask.IsFaulted)
@@ -80,131 +90,97 @@ public sealed class RecordConsumer<TKey, TValue> : IDisposable
         }
     }
 
-    private Task StartConsumeLoop(IConsumer<TKey, TValue> consumer, CancellationToken token)
+    private async Task ConsumeLoop(IConsumer<byte[], byte[]> consumer, CancellationToken token)
     {
-        return Task.Run(
-            async () =>
-            {
-                try
-                {
-                    while (!token.IsCancellationRequested)
-                    {
-                        ConsumeResult<TKey, TValue> consumeResult;
-
-                        try
-                        {
-                            consumeResult = consumer.Consume(token);
-                        }
-                        catch (ConsumeException e) when (
-                            DeserializationErrorHandler is not null &&
-                            (e.Error.Code is 
-                                ErrorCode.Local_ValueDeserialization or 
-                                ErrorCode.Local_KeyDeserialization))
-                        {
-                            await DeserializationErrorHandler(e, token);
-
-                            try
-                            {
-                                MarkAsAcked(e.ConsumerRecord.TopicPartitionOffset);
-                            }
-                            catch (KafkaOffsetManagementException e2) when (
-                                e2.ErrorCode is KafkaOffsetManagementErrorCode.OffsetOutOfOrder)
-                            {
-                                // Partition was revoked and assigned back.
-                                // Some messages are redelivered therefore can be discarded.
-                            }
-
-                            continue;
-                        }
-
-                        AckId ackId;
-
-                        try
-                        {
-                            ackId = await GetAckIdAsync(consumeResult.TopicPartitionOffset, token);
-                        }
-                        catch (KafkaOffsetManagementException e) when (
-                            e.ErrorCode is KafkaOffsetManagementErrorCode.OffsetOutOfOrder)
-                        {
-                            // Partition was revoked and assigned back.
-                            // Some messages are redelivered therefore can be discarded.
-                            continue;
-                        }
-
-                        await WriteToChannelAsync(consumeResult, ackId, token);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // Ignore.
-                }
-            },
-            token);
-    }
-
-    private Task StartHandleLoop(ChannelReader<(ConsumeResult<TKey, TValue>, AckId)> reader, CancellationToken token)
-    {
-        return Task.Run(
-            async () =>
-            {
-                try
-                {
-                    await foreach (var (consumeResult, ackId) in reader.ReadAllAsync(token))
-                    {
-                        if (ConsumeResultHandler is not null)
-                            await ConsumeResultHandler(consumeResult, token);
-
-                        Ack(consumeResult.TopicPartition, ackId);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // Ignore.
-                }
-            },
-            token);
-    }
-
-    private Task StartCommitLoop(IConsumer<TKey, TValue> consumer, CancellationToken token)
-    {
-        return Task.Run(
-            async () =>
-            {
-                try
-                {
-                    while (!token.IsCancellationRequested)
-                    {
-                        await Task.Delay(_config.AutoCommitIntervalMs, token);
-                        CommitOffsets(consumer);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // Ignore.
-                }
-            },
-            token);
-    }
-
-    private ValueTask WriteToChannelAsync(ConsumeResult<TKey, TValue> consumeResult, AckId ackId, CancellationToken token)
-    {
-        int channelIndex;
-
-        if (MemoryPartitionKeyResolver is not null)
+        try
         {
-            var memoryPartitionKey = MemoryPartitionKeyResolver(consumeResult);
-            channelIndex = _partitionManager.GetPartition(memoryPartitionKey);
-        }
-        else
-        {
-            channelIndex = _nextChannelIndex;
-            _nextChannelIndex = _nextChannelIndex == _channels.Length - 1
-                ? 0
-                : _nextChannelIndex + 1;
-        }
+            while (!token.IsCancellationRequested)
+            {
+                var consumeResult = consumer.Consume(token);
 
+                AckId ackId;
+
+                try
+                {
+                    ackId = await GetAckIdAsync(consumeResult.TopicPartitionOffset, token);
+                }
+                catch (KafkaOffsetManagementException oe)
+                    when (oe.ErrorCode is KafkaOffsetManagementErrorCode.OffsetOutOfOrder)
+                {
+                    // Partition was revoked and assigned back.
+                    // Some messages are redelivered therefore can be discarded.
+                    continue;
+                }
+
+                await WriteToChannelAsync(consumeResult, ackId, token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore.
+        }
+    }
+
+    private async Task HandleLoop(ChannelReader<(ConsumeResult<byte[], byte[]>, AckId)> reader, CancellationToken token)
+    {
+        try
+        {
+            await foreach (var (consumeResult, ackId) in reader.ReadAllAsync(token))
+            {
+                if (ConsumeResultHandler is not null)
+                {
+                    try
+                    {
+                        await ConsumeResultHandler(consumeResult, token);
+                    }
+                    catch (Exception)
+                        when (Producer is not null)
+                    {
+                        await SendToDeadLetterTopicAsync(Producer, consumeResult, token);
+                    }
+                }
+
+                Ack(consumeResult.TopicPartition, ackId);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore.
+        }
+    }
+
+    private async Task CommitLoop(IConsumer<byte[], byte[]> consumer, CancellationToken token)
+    {
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(_config.AutoCommitIntervalMs, token);
+                CommitOffsets(consumer);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Ignore.
+        }
+    }
+
+    private ValueTask WriteToChannelAsync(ConsumeResult<byte[], byte[]> consumeResult, AckId ackId, CancellationToken token)
+    {
+        var channelIndex = GetNextChannelIndex(consumeResult);
         var writer = _channels[channelIndex].Writer;
         return writer.WriteAsync((consumeResult, ackId), token);
+    }
+
+    private int GetNextChannelIndex(ConsumeResult<byte[], byte[]> consumeResult)
+    {
+        if (MemoryPartitionKeyResolver is not null)
+        {
+            var partitionKey = MemoryPartitionKeyResolver(consumeResult);
+            return _valueBasedPartitionManger.GetPartition(partitionKey);
+        }
+
+        return _roundRobinPartitionManager.GetNextPartition();
     }
 
     private Task<AckId> GetAckIdAsync(TopicPartitionOffset topicPartitionOffset, CancellationToken token)
@@ -225,13 +201,7 @@ public sealed class RecordConsumer<TKey, TValue> : IDisposable
         offsetManager.Ack(ackId);
     }
 
-    private void MarkAsAcked(TopicPartitionOffset topicPartitionOffset)
-    {
-        var offsetManager = _offsetManagers[topicPartitionOffset.TopicPartition];
-        offsetManager.MarkAsAcked(topicPartitionOffset.Offset);
-    }
-
-    private void CommitOffsets(IConsumer<TKey, TValue> consumer)
+    private void CommitOffsets(IConsumer<byte[], byte[]> consumer)
     {
         var commitTopicPartitionOffsets = new List<TopicPartitionOffset>();
 
@@ -250,41 +220,15 @@ public sealed class RecordConsumer<TKey, TValue> : IDisposable
         consumer.Commit(commitTopicPartitionOffsets);
     }
 
-    private IConsumer<TKey, TValue> BuildConsumer()
+    private Task SendToDeadLetterTopicAsync(IProducer<byte[], byte[]> producer, ConsumeResult<byte[], byte[]> consumeResult, CancellationToken token)
     {
-        var config = new ConsumerConfig
-        {
-            GroupId = _config.GroupId,
-            BootstrapServers = _config.BootstrapServers,
-            SocketNagleDisable = _config.SocketNagleDisable,
-            AutoOffsetReset = _config.AutoOffsetReset,
-            AllowAutoCreateTopics = _config.AllowAutoCreateTopics,
-            CheckCrcs = _config.CheckCrcs,
-            SessionTimeoutMs = _config.SessionTimeoutMs,
-            HeartbeatIntervalMs = _config.HeartbeatIntervalMs,
-            CoordinatorQueryIntervalMs = _config.CoordinatorQueryIntervalMs,
-            MaxPollIntervalMs = _config.MaxPollIntervalMs,
-            QueuedMinMessages = _config.QueuedMinMessages,
-            QueuedMaxMessagesKbytes = _config.QueuedMaxMessagesKbytes,
-            FetchWaitMaxMs = _config.FetchWaitMaxMs,
-            MaxPartitionFetchBytes = _config.MaxPartitionFetchBytes,
-            FetchMaxBytes = _config.FetchMaxBytes,
-            FetchMinBytes = _config.FetchMinBytes,
-            FetchErrorBackoffMs = _config.FetchErrorBackoffMs,
-            IsolationLevel = _config.IsolationLevel,
-            EnablePartitionEof = _config.EnablePartitionEof,
-            Debug = _config.Debug,
-            EnableAutoOffsetStore = false,
-            EnableAutoCommit = false
-        };
+        var deadLetterTopic = _retryTopicMap.GetDeadLetterTopic(consumeResult.Topic);
+        return producer.ProduceAsync(deadLetterTopic, consumeResult.Message, token);
+    }
 
-        var builder = new ConsumerBuilder<TKey, TValue>(config);
-
-        if (KeyDeserializer is not null)
-            builder.SetKeyDeserializer(KeyDeserializer);
-
-        if (ValueDeserializer is not null)
-            builder.SetValueDeserializer(ValueDeserializer);
+    private IConsumer<byte[], byte[]> BuildConsumer()
+    {
+        var builder = new ConsumerBuilder<byte[], byte[]>(_config);
 
         if (LogHandler is not null)
             builder.SetLogHandler(LogHandler);
