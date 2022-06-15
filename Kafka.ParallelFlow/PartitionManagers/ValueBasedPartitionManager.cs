@@ -14,8 +14,9 @@ internal sealed class ValueBasedPartitionManager
 
     public int GetPartition(Span<byte> value)
     {
-        var hash = Math.Abs(Hash(value));
-        return (int)(hash % _numberOfPartitions);
+        var hash = Hash(value);
+        var hashAbs = Math.Abs(hash);
+        return (int)(hashAbs % _numberOfPartitions);
     }
 
     private static long Hash(Span<byte> value)

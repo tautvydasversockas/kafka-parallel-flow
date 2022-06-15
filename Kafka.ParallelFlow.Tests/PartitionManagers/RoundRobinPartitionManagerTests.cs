@@ -1,4 +1,8 @@
-﻿namespace Kafka.ParallelFlow.Tests.PartitionManagers;
+﻿using FluentAssertions;
+using Kafka.ParallelFlow.PartitionManagers;
+using Xunit;
+
+namespace Kafka.ParallelFlow.Tests.PartitionManagers;
 
 public sealed class RoundRobinPartitionManagerTests
 {

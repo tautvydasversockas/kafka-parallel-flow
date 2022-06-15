@@ -1,4 +1,6 @@
-﻿namespace Kafka.ParallelFlow;
+﻿using Confluent.Kafka;
+
+namespace Kafka.ParallelFlow;
 
 /// <summary>
 ///     Record consumer configuration properties.
@@ -24,8 +26,6 @@ public sealed class RecordConsumerConfig : ConsumerConfig
     /// </summary>
     public RecordConsumerConfig(IDictionary<string, string> config) : base(config) { }
 
-    #region `Kafka.ParallelFlow` config values
-
     /// <summary>
     ///     The max number of consumer threads.
     ///
@@ -42,36 +42,11 @@ public sealed class RecordConsumerConfig : ConsumerConfig
     /// </summary>
     public int MaxUncommittedMessagesPerMemoryPartition { get; init; } = 10_000;
 
-    public string? DeadLetterTopicName { get; set; }
-
-
-    #endregion
-
-    #region `Confluent.Kafka` config override values
-
     /// <summary>
-    ///     The frequency in milliseconds that the consumer offsets are committed (written) to offset storage.
+    ///     The max number of uncommitted messages per memory partition.
     ///
-    ///     default: 5000
-    ///     importance: medium
+    ///     default: {Topic}__{GroupId}__dlt
+    ///     importance: low
     /// </summary>
-    public new int AutoCommitIntervalMs { get; init; } = 5_000;
-
-    /// <summary>
-    ///     Automatically store offset of last message provided to application. The offset store is an in-memory store of the next offset to (auto-)commit for each partition.
-    ///
-    ///     default: false
-    ///     importance: high
-    /// </summary>
-    public readonly new bool EnableAutoOffsetStore = false;
-
-    /// <summary>
-    ///     Automatically and periodically commit offsets in the background. Note: setting this to false does not prevent the consumer from fetching previously committed start offsets. To circumvent this behaviour set specific start offsets per partition in the call to assign().
-    ///
-    ///     default: false
-    ///     importance: high
-    /// </summary>
-    public readonly new bool EnableAutoCommit = false;
-
-    #endregion
+    public string? DeadLetterTopic { get; set; }
 }

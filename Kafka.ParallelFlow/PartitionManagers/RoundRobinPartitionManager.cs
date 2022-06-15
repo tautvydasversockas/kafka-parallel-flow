@@ -15,6 +15,6 @@ internal sealed class RoundRobinPartitionManager
 
     public int GetNextPartition()
     {
-        return _prevPartition = _prevPartition == _numberOfPartitions - 1 ? 0 : _prevPartition + 1;
+        return _prevPartition = _prevPartition + 1 == _numberOfPartitions ? 0 : _prevPartition + 1;
     }
 }

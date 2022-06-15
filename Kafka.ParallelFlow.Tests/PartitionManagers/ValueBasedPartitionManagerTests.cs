@@ -1,4 +1,9 @@
-﻿namespace Kafka.ParallelFlow.Tests.PartitionManagers;
+﻿using FluentAssertions;
+using Kafka.ParallelFlow.PartitionManagers;
+using System.Text;
+using Xunit;
+
+namespace Kafka.ParallelFlow.Tests.PartitionManagers;
 
 public sealed class ValueBasedPartitionManagerTests
 {

@@ -34,10 +34,15 @@ var consumerConfig = new RecordConsumerConfig
     BootstrapServers = "localhost:9092",
     // Messages will be handled in parallel by up to 10 threads.
     MaxDegreeOfParallelism = 10,
+    EnableAutoCommit = true,
+    AutoCommitIntervalMs = 5_000,
+    // If EnableAutoOffsetStore is true, messages will be stored for commit before they are handled.
+    // If EnableAutoOffsetStore is false, messages will be stored for commit after they are handled.
+    EnableAutoOffsetStore = false,
     AutoOffsetReset = AutoOffsetReset.Earliest
 };
 
-var consumer = new RecordConsumer(consumerConfig);
+using var consumer = new RecordConsumer(consumerConfig);
 
 // Messages with the same resolved key are handled in order.
 // If `MemoryPartitionKeyResolver` is not set, no order 
@@ -45,13 +50,18 @@ var consumer = new RecordConsumer(consumerConfig);
 // round robin fashion.
 consumer.MemoryPartitionKeyResolver = consumeResult => consumeResult.Message.Key;
 
+consumer.ErrorHandler = ex => Environment.Exit(1);
+
 consumer.ConsumeResultHandler = (consumeResult, _) => 
 {
     Console.WriteLine(consumeResult.TopicPartitionOffset.ToString());
     return Task.CompletedTask;
 };
 
-await consumer.Start("test-topic");
+// Starting non-blocking consumption.
+consumer.Start("test-topic");
+
+Console.ReadKey();
 ```
 
 ### Dead letter topic example
@@ -59,26 +69,34 @@ await consumer.Start("test-topic");
 ```csharp
 using Kafka.ParallelFlow;
 
-var producerConfig = new ProducerConfig
-{
-    BootstrapServers = BootstrapServers
-};
-
-var producer = new ProducerBuilder<byte[], byte[]>(producerConfig).Build();
-
 var consumerConfig = new RecordConsumerConfig
 {
     GroupId = "group-id-1",
     BootstrapServers = "localhost:9092",
     MaxDegreeOfParallelism = 10,
-    AutoOffsetReset = AutoOffsetReset.Earliest
+    EnableAutoCommit = true,
+    AutoCommitIntervalMs = 5_000,
+    EnableAutoOffsetStore = false,
+    AutoOffsetReset = AutoOffsetReset.Earliest,
+    // Default dead letter topic name is <topic>__<consumer-group-id>__dlt.
+    // It can be overriden by setting DeadLetterTopic value.
+    DeadLetterTopic = "dead-letters"
 };
 
-var consumer = new RecordConsumer(consumerConfig);
+using var consumer = new RecordConsumer(consumerConfig);
+
+consumer.ErrorHandler = ex => Environment.Exit(1);
+
+var producerConfig = new ProducerConfig
+{
+    BootstrapServers = BootstrapServers
+};
+
+using var producer = new ProducerBuilder<byte[], byte[]>(producerConfig).Build();
 
 // Setting producer enables dead letter topic functionality. 
-// If an error occurs in `ConsumeResultHandler`, the message will be produced
-// to a dead letter topic. Default dead letter topic name is <topic>__<consumer-group-id>__dlt.
+// If an error occurs while handling message, 
+// the message will be produced to a dead letter topic. 
 consumer.Producer = producer;
 
 consumer.ConsumeResultHandler = (consumeResult, _) => 
@@ -87,7 +105,9 @@ consumer.ConsumeResultHandler = (consumeResult, _) =>
     return Task.CompletedTask;
 };
 
-await consumer.Start("test-topic");
+consumer.Start("test-topic");
+
+Console.ReadKey();
 ```
 
 ## Support

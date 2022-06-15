@@ -3,7 +3,7 @@
 	<PropertyGroup>
 		<TargetFrameworks>netstandard2.1;net6.0</TargetFrameworks>
 		<PackageId>Kafka.ParallelFlow</PackageId>
-		<Version>0.3.0</Version>
+		<Version>0.4.0</Version>
 		<Authors>Tautvydas Versockas</Authors>
 		<Description>Kafka.ParallelFlow - Kafka client for processing data at scale</Description>
 		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
@@ -30,14 +30,8 @@
 	
 	<ItemGroup>
 		<PackageReference Include="Confluent.Kafka" Version="1.8.2" />
-		<PackageReference Include="Kafka.OffsetManager" Version="2.2.0" />
+		<PackageReference Include="Kafka.OffsetManager" Version="2.2.1" />
 		<PackageReference Include="System.Threading.Channels" Version="6.0.0" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<Using Include="Confluent.Kafka" />
-		<Using Include="Kafka.OffsetManagement" />
-		<Using Include="System.Threading.Channels" />
 	</ItemGroup>
 
 </Project>
