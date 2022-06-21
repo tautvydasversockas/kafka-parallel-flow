@@ -49,28 +49,18 @@ public sealed class RecordConsumer : IDisposable
 
     private readonly Dictionary<TopicPartition, OffsetManager> _offsetManagers = new();
     private readonly Dictionary<TopicPartition, Offset> _committedOffsets = new();
-    private readonly List<Channel<(ConsumeResult<byte[], byte[]>, AckId?)>> _channels = new();
     private readonly List<Task> _tasks = new();
     private readonly RecordConsumerConfig _config;
-    private readonly RoundRobinPartitionManager _roundRobinPartitionManager;
-    private readonly ValueBasedPartitionManager _valueBasedPartitionManger;
 
     private IConsumer<byte[], byte[]>? _consumer;
     private CancellationTokenSource? _cts;
+    private Func<ConsumeResult<byte[], byte[]>, ChannelWriter<(ConsumeResult<byte[], byte[]>, AckId?)>>? _channelWriterResolver;
 
     private bool _disposed;
 
     public RecordConsumer(RecordConsumerConfig config)
     {
         _config = config;
-        _roundRobinPartitionManager = new RoundRobinPartitionManager(config.MaxDegreeOfParallelism);
-        _valueBasedPartitionManger = new ValueBasedPartitionManager(config.MaxDegreeOfParallelism);
-
-        for (var i = 0; i < config.MaxDegreeOfParallelism; i++)
-        {
-            var channel = Channel.CreateUnbounded<(ConsumeResult<byte[], byte[]>, AckId?)>();
-            _channels.Add(channel);
-        }
     }
 
     /// <summary>
@@ -92,21 +82,48 @@ public sealed class RecordConsumer : IDisposable
         _consumer = BuildConsumer();
         _consumer.Subscribe(topics);
 
-        _cts = new CancellationTokenSource();
-        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, _cts.Token);
-        var linkedToken = linkedCts.Token;
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(token);
 
-        foreach (var channel in _channels)
-            StartLoop(() => HandleLoop(channel.Reader, linkedToken), linkedToken);
-
-        StartLoop(() => ConsumeLoop(linkedToken), linkedToken);
-
-        if (_config.EnableAutoCommit is null or true &&
-            _config.AutoCommitIntervalMs is not 0)
+        if (ConsumeResultHandler is not null && _config.MaxDegreeOfParallelism > 0)
         {
-            var autoCommitIntervalMs = _config.AutoCommitIntervalMs ?? 5_000;
-            StartLoop(() => CommitLoop(autoCommitIntervalMs, linkedToken), linkedToken);
+            var channels = new Channel<(ConsumeResult<byte[], byte[]>, AckId?)>[_config.MaxDegreeOfParallelism];
+
+            for (var i = 0; i < _config.MaxDegreeOfParallelism; i++)
+            {
+                var channel = Channel.CreateUnbounded<(ConsumeResult<byte[], byte[]>, AckId?)>();
+                channels[i] = channel;
+                _tasks.Add(HandleLoop(channel.Reader, ConsumeResultHandler, _cts.Token));
+            }
+
+            if (_config.MaxDegreeOfParallelism is 1)
+            {
+                _channelWriterResolver = _ => channels[0];
+            }
+            else if (MemoryPartitionKeyResolver is not null)
+            {
+                var partitionManger = new ValueBasedPartitionManager(_config.MaxDegreeOfParallelism);
+                _channelWriterResolver = consumeResult =>
+                {
+                    var partitionKey = MemoryPartitionKeyResolver(consumeResult);
+                    var partition = partitionManger.GetPartition(partitionKey);
+                    return channels[partition];
+                };
+            }
+            else
+            {
+                var partitionManger = new RoundRobinPartitionManager(_config.MaxDegreeOfParallelism);
+                _channelWriterResolver = _ =>
+                {
+                    var partition = partitionManger.GetNextPartition();
+                    return channels[partition];
+                };
+            }
         }
+
+        _tasks.Add(ConsumeLoop(_consumer, _cts.Token));
+
+        if (IsAutoCommitEnabled())
+            _tasks.Add(CommitLoop(_consumer, _cts.Token));
     }
 
     /// <summary>
@@ -126,6 +143,8 @@ public sealed class RecordConsumer : IDisposable
 
         _tasks.Clear();
 
+        _channelWriterResolver = null;
+
         _cts?.Dispose();
         _cts = null;
 
@@ -133,20 +152,113 @@ public sealed class RecordConsumer : IDisposable
         {
             // Manually commit remaining offsets
             // to minimise duplicate messages.
-            CommitOffsets();
+            CommitOffsets(_consumer);
         }
         catch (Exception)
         {
             // Ignore.
         }
 
+        _committedOffsets.Clear();
+
+        foreach (var offsetManager in _offsetManagers.Values)
+            offsetManager.Dispose();
+
+        _offsetManagers.Clear();
+
         _consumer.Dispose();
         _consumer = null;
     }
 
-    private void StartLoop(Func<Task> loopTask, CancellationToken token)
+    private Task ConsumeLoop(IConsumer<byte[], byte[]> consumer, CancellationToken token)
     {
-        var task = Task.Run(
+        return RunLoop(
+            async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var consumeResult = consumer.Consume(token);
+
+                    if (ConsumeResultHandler is null || _channelWriterResolver is null)
+                    {
+                        MarkAsAcked(consumeResult);
+                        continue;
+                    }
+
+                    AckId? ackId;
+                    try
+                    {
+                        if (IsAutoOffsetStoreEnabled())
+                        {
+                            MarkAsAcked(consumeResult);
+                            ackId = null;
+                        }
+                        else
+                        {
+                            ackId = await GetAckIdAsync(consumeResult, token);
+                        }
+                    }
+                    catch (KafkaOffsetManagementException e)
+                        when (e.ErrorCode is KafkaOffsetManagementErrorCode.OffsetOutOfOrder)
+                    {
+                        // Partition was revoked and assigned back.
+                        // Some messages are redelivered therefore can be discarded.
+                        continue;
+                    }
+
+                    var channelWriter = _channelWriterResolver(consumeResult);
+                    await channelWriter.WriteAsync((consumeResult, ackId), token);
+                }
+            },
+            token);
+    }
+
+    private Task HandleLoop(
+        ChannelReader<(ConsumeResult<byte[], byte[]>, AckId?)> reader,
+        Func<ConsumeResult<byte[], byte[]>, CancellationToken, Task> handle,
+        CancellationToken token)
+    {
+        return RunLoop(
+            async () =>
+            {
+                await foreach (var (consumeResult, ackId) in reader.ReadAllAsync(token))
+                {
+                    try
+                    {
+                        await handle(consumeResult, token);
+                    }
+                    catch (Exception)
+                        when (Producer is not null)
+                    {
+                        await SendToDeadLetterTopicAsync(Producer, consumeResult, token);
+                    }
+
+                    if (ackId is not null)
+                        Ack(consumeResult, ackId.Value);
+                }
+            },
+            token);
+    }
+
+    private Task CommitLoop(IConsumer<byte[], byte[]> consumer, CancellationToken token)
+    {
+        return RunLoop(
+           async () =>
+           {
+               var autoCommitIntervalMs = _config.AutoCommitIntervalMs ?? 5_000;
+
+               while (!token.IsCancellationRequested)
+               {
+                   await Task.Delay(autoCommitIntervalMs, token);
+                   CommitOffsets(consumer);
+               }
+           },
+           token);
+    }
+
+    private Task RunLoop(Func<Task> loopTask, CancellationToken token)
+    {
+        return Task.Run(
             async () =>
             {
                 try
@@ -158,142 +270,51 @@ public sealed class RecordConsumer : IDisposable
                     // Ignore.
                 }
                 catch (Exception e)
+                    when (ErrorHandler is not null)
                 {
-                    ErrorHandler?.Invoke(e);
+                    ErrorHandler(e);
                 }
             },
             token);
-
-        _tasks.Add(task);
     }
 
-    private async Task ConsumeLoop(CancellationToken token)
+    private void MarkAsAcked(ConsumeResult<byte[], byte[]> consumeResult)
     {
-        if (_consumer is null)
-            throw new InvalidOperationException("Consumer is not initialised.");
-
-        while (!token.IsCancellationRequested)
-        {
-            var consumeResult = _consumer.Consume(token);
-            await WriteToChannelAsync(consumeResult, token);
-        }
+        var offsetManager = GetOrCreateOffsetManager(consumeResult);
+        offsetManager.MarkAsAcked(consumeResult.Offset);
     }
 
-    private async Task HandleLoop(ChannelReader<(ConsumeResult<byte[], byte[]>, AckId?)> reader, CancellationToken token)
+    private Task<AckId> GetAckIdAsync(ConsumeResult<byte[], byte[]> consumeResult, CancellationToken token)
     {
-        await foreach (var (consumeResult, ackId) in reader.ReadAllAsync(token))
-        {
-            await HandleAsync(consumeResult, token);
-
-            if (ackId is not null)
-                Ack(consumeResult.TopicPartition, ackId.Value);
-        }
+        var offsetManager = GetOrCreateOffsetManager(consumeResult);
+        return offsetManager.GetAckIdAsync(consumeResult.Offset, token);
     }
 
-    private async Task CommitLoop(int autoCommitInterval, CancellationToken token)
+    private void Ack(ConsumeResult<byte[], byte[]> consumeResult, AckId ackId)
     {
-        while (!token.IsCancellationRequested)
-        {
-            await Task.Delay(autoCommitInterval, token);
-            CommitOffsets();
-        }
-    }
-
-    private async Task HandleAsync(ConsumeResult<byte[], byte[]> consumeResult, CancellationToken token)
-    {
-        if (ConsumeResultHandler is null)
-            return;
-
-        try
-        {
-            await ConsumeResultHandler(consumeResult, token);
-        }
-        catch (Exception)
-            when (Producer is not null)
-        {
-            await SendToDeadLetterTopicAsync(consumeResult, token);
-        }
-    }
-
-    private async Task WriteToChannelAsync(ConsumeResult<byte[], byte[]> consumeResult, CancellationToken token)
-    {
-        AckId? ackId;
-
-        if (_config.EnableAutoOffsetStore is null or true)
-        {
-            MarkAsAcked(consumeResult.TopicPartitionOffset);
-            ackId = null;
-        }
-        else
-        {
-            try
-            {
-                ackId = await GetAckIdAsync(consumeResult.TopicPartitionOffset, token);
-            }
-            catch (KafkaOffsetManagementException oe)
-                when (oe.ErrorCode is KafkaOffsetManagementErrorCode.OffsetOutOfOrder)
-            {
-                // Partition was revoked and assigned back.
-                // Some messages are redelivered therefore can be discarded.
-                return;
-            }
-        }
-
-        await WriteToChannelAsync(consumeResult, ackId, token);
-    }
-
-    private ValueTask WriteToChannelAsync(ConsumeResult<byte[], byte[]> consumeResult, AckId? ackId, CancellationToken token)
-    {
-        var channelIndex = GetNextChannelIndex(consumeResult);
-        var writer = _channels[channelIndex].Writer;
-        return writer.WriteAsync((consumeResult, ackId), token);
-    }
-
-    private int GetNextChannelIndex(ConsumeResult<byte[], byte[]> consumeResult)
-    {
-        if (MemoryPartitionKeyResolver is not null)
-        {
-            var partitionKey = MemoryPartitionKeyResolver(consumeResult);
-            return _valueBasedPartitionManger.GetPartition(partitionKey);
-        }
-
-        return _roundRobinPartitionManager.GetNextPartition();
-    }
-
-    private void MarkAsAcked(TopicPartitionOffset topicPartitionOffset)
-    {
-        var offsetManager = GetOrCreateOffsetManager(topicPartitionOffset.TopicPartition);
-        offsetManager.MarkAsAcked(topicPartitionOffset.Offset);
-    }
-
-    private Task<AckId> GetAckIdAsync(TopicPartitionOffset topicPartitionOffset, CancellationToken token)
-    {
-        var offsetManager = GetOrCreateOffsetManager(topicPartitionOffset.TopicPartition);
-        return offsetManager.GetAckIdAsync(topicPartitionOffset.Offset, token);
-    }
-
-    private void Ack(TopicPartition topicPartition, AckId ackId)
-    {
-        var offsetManager = _offsetManagers[topicPartition];
+        var offsetManager = GetOffsetManager(consumeResult);
         offsetManager.Ack(ackId);
     }
 
-    private OffsetManager GetOrCreateOffsetManager(TopicPartition topicPartition)
+    private OffsetManager GetOffsetManager(ConsumeResult<byte[], byte[]> consumeResult)
     {
-        if (_offsetManagers.TryGetValue(topicPartition, out var offsetManager))
-            return offsetManager;
+        return _offsetManagers[consumeResult.TopicPartition];
+    }
 
-        offsetManager = new OffsetManager(_config.MaxUncommittedMessagesPerMemoryPartition);
-        _offsetManagers[topicPartition] = offsetManager;
-        _committedOffsets[topicPartition] = Offset.Beginning;
+    private OffsetManager GetOrCreateOffsetManager(ConsumeResult<byte[], byte[]> consumeResult)
+    {
+        if (!_offsetManagers.TryGetValue(consumeResult.TopicPartition, out var offsetManager))
+        {
+            offsetManager = new OffsetManager(_config.MaxUncommittedMessagesPerMemoryPartition);
+            _offsetManagers[consumeResult.TopicPartition] = offsetManager;
+            _committedOffsets[consumeResult.TopicPartition] = Offset.Beginning;
+        }
+
         return offsetManager;
     }
 
-    private void CommitOffsets()
+    private void CommitOffsets(IConsumer<byte[], byte[]> consumer)
     {
-        if (_consumer is null)
-            throw new InvalidOperationException("Consumer is not initialised.");
-
         var topicPartitionOffsets = new List<TopicPartitionOffset>();
 
         foreach (var (topicPartition, offsetManager) in _offsetManagers)
@@ -302,21 +323,20 @@ public sealed class RecordConsumer : IDisposable
             if (commitOffset is null || commitOffset <= _committedOffsets[topicPartition])
                 continue;
 
+            topicPartitionOffsets.Add(new TopicPartitionOffset(topicPartition, commitOffset.Value));
             _committedOffsets[topicPartition] = commitOffset.Value;
-            var topicPartitionOffset = new TopicPartitionOffset(topicPartition, commitOffset.Value);
-            topicPartitionOffsets.Add(topicPartitionOffset);
         }
 
-        _consumer.Commit(topicPartitionOffsets);
+        consumer.Commit(topicPartitionOffsets);
     }
 
-    private async Task SendToDeadLetterTopicAsync(ConsumeResult<byte[], byte[]> consumeResult, CancellationToken token)
+    private async Task SendToDeadLetterTopicAsync(
+        IProducer<byte[], byte[]> producer,
+        ConsumeResult<byte[], byte[]> consumeResult,
+        CancellationToken token)
     {
-        if (Producer is null)
-            throw new InvalidOperationException("Producer is not initialised.");
-
         var deadLetterTopic = GetDeadLetterTopic(consumeResult.Topic);
-        await Producer.ProduceAsync(deadLetterTopic, consumeResult.Message, token);
+        await producer.ProduceAsync(deadLetterTopic, consumeResult.Message, token);
     }
 
     private string GetDeadLetterTopic(string topic)
@@ -349,15 +369,22 @@ public sealed class RecordConsumer : IDisposable
         return builder.Build();
     }
 
+    private bool IsAutoCommitEnabled()
+    {
+        return _config.EnableAutoCommit is null or true && _config.AutoCommitIntervalMs is not 0;
+    }
+
+    private bool IsAutoOffsetStoreEnabled()
+    {
+        return _config.EnableAutoOffsetStore is null or true;
+    }
+
     public void Dispose()
     {
         if (_disposed)
             return;
 
         Stop();
-
-        foreach (var offsetManager in _offsetManagers.Values)
-            offsetManager.Dispose();
 
         _disposed = true;
     }
