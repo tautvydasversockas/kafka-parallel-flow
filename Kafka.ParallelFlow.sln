@@ -5,7 +5,13 @@ VisualStudioVersion = 17.0.32112.339
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Kafka.ParallelFlow", "Kafka.ParallelFlow\Kafka.ParallelFlow.csproj", "{C900290B-0CA7-489E-942D-25F4F1E4B974}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Kafka.ParallelFlow.Tests", "Kafka.ParallelFlow.Tests\Kafka.ParallelFlow.Tests.csproj", "{37E7BD8B-040F-4A2A-B546-F4040DC960FC}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Kafka.ParallelFlow.Tests", "Kafka.ParallelFlow.Tests\Kafka.ParallelFlow.Tests.csproj", "{37E7BD8B-040F-4A2A-B546-F4040DC960FC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Kafka.ParallelFlow.Playground", "Kafka.ParallelFlow.Playground\Kafka.ParallelFlow.Playground.csproj", "{AC279895-4DBD-4B10-956E-A4480B4B6F5A}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{89A879F9-303F-47E4-98A7-CA654E0ED52A}"
+EndProject
+Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{8FCF4277-1606-4499-99FC-C02324A6AC2C}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,9 +27,22 @@ Global
 		{37E7BD8B-040F-4A2A-B546-F4040DC960FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{37E7BD8B-040F-4A2A-B546-F4040DC960FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{37E7BD8B-040F-4A2A-B546-F4040DC960FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC279895-4DBD-4B10-956E-A4480B4B6F5A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC279895-4DBD-4B10-956E-A4480B4B6F5A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC279895-4DBD-4B10-956E-A4480B4B6F5A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC279895-4DBD-4B10-956E-A4480B4B6F5A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8FCF4277-1606-4499-99FC-C02324A6AC2C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8FCF4277-1606-4499-99FC-C02324A6AC2C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8FCF4277-1606-4499-99FC-C02324A6AC2C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8FCF4277-1606-4499-99FC-C02324A6AC2C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{37E7BD8B-040F-4A2A-B546-F4040DC960FC} = {89A879F9-303F-47E4-98A7-CA654E0ED52A}
+		{AC279895-4DBD-4B10-956E-A4480B4B6F5A} = {89A879F9-303F-47E4-98A7-CA654E0ED52A}
+		{8FCF4277-1606-4499-99FC-C02324A6AC2C} = {89A879F9-303F-47E4-98A7-CA654E0ED52A}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {762BDB19-0926-4D08-AB9D-7FD34F14559C}
