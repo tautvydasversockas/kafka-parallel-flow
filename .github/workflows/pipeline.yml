@@ -23,7 +23,7 @@ jobs:
       run: dotnet build Kafka.ParallelFlow.sln
 
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test Kafka.ParallelFlow.Tests/Kafka.ParallelFlow.Tests.csproj --no-build --verbosity normal
 
     - name: Publish  
       uses: alirezanet/publish-nuget@v3.0.4
