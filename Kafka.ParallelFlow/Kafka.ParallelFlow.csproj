@@ -3,7 +3,8 @@
 	<PropertyGroup>
 		<TargetFrameworks>netstandard2.1;net6.0</TargetFrameworks>
 		<PackageId>Kafka.ParallelFlow</PackageId>
-		<Version>0.5.0</Version>
+		<PackageIcon>icon.png</PackageIcon>
+		<Version>0.5.1</Version>
 		<Authors>Tautvydas Versockas</Authors>
 		<Description>Kafka.ParallelFlow - Kafka client for processing data at scale</Description>
 		<PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
@@ -26,11 +27,12 @@
 
 	<ItemGroup>
 		<Compile Remove="IsExternalInit.cs" Condition="'$(TargetFramework)' == 'net6.0'" />
+		<None Include="icon.png" Pack="true" PackagePath="" />
 	</ItemGroup>
-	
+
 	<ItemGroup>
 		<PackageReference Include="Confluent.Kafka" Version="1.9.0" />
-		<PackageReference Include="Kafka.OffsetManager" Version="2.2.1" />
+		<PackageReference Include="Kafka.OffsetManager" Version="2.2.2" />
 		<PackageReference Include="System.Threading.Channels" Version="6.0.0" />
 	</ItemGroup>
 
